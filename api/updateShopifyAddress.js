@@ -8,34 +8,26 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
 
   try {
-    const {
-      token, // Storefront customerAccessToken
-      address1,
-      address2,
-      city,
-      province,
-      zip,
-      country
-    } = req.body;
+    const { customerAccessToken, addressId, address } = req.body;
 
-    if (!token || !address1 || !city || !province || !zip || !country) {
-      return res.status(400).json({ error: "Missing required address fields" });
+    if (!customerAccessToken || !addressId || !address) {
+      return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const mutation = `
-      mutation customerAddressUpdate($customerAccessToken: String!, $address: MailingAddressInput!) {
-        customerUpdateDefaultAddress(customerAccessToken: $customerAccessToken, address: $address) {
-          customer {
-            defaultAddress {
-              address1
-              address2
-              city
-              province
-              zip
-              country
-            }
+    const endpoint = "https://tuqhcs-7a.myshopify.com/api/2023-10/graphql.json";
+    const headers = {
+      "Content-Type": "application/json",
+      "X-Shopify-Storefront-Access-Token": process.env.SHOPIFY_STOREFRONT_API_TOKEN
+    };
+
+    // STEP 1 – Update the address
+    const updateMutation = `
+      mutation customerAddressUpdate($customerAccessToken: String!, $id: ID!, $address: MailingAddressInput!) {
+        customerAddressUpdate(customerAccessToken: $customerAccessToken, id: $id, address: $address) {
+          customerAddress {
+            id
           }
-          userErrors {
+          customerUserErrors {
             field
             message
           }
@@ -43,34 +35,69 @@ export default async function handler(req, res) {
       }
     `;
 
-    const variables = {
-      customerAccessToken: token,
-      address: {
-        address1,
-        address2,
-        city,
-        province,
-        zip,
-        country
-      }
-    };
-
-    const response = await fetch("https://tuqhcs-7a.myshopify.com/api/2024-04/graphql.json", {
+    const updateRes = await fetch(endpoint, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Shopify-Storefront-Access-Token": process.env.SHOPIFY_STOREFRONT_API_TOKEN
-      },
-      body: JSON.stringify({ query: mutation, variables })
+      headers,
+      body: JSON.stringify({
+        query: updateMutation,
+        variables: {
+          customerAccessToken,
+          id: addressId,
+          address
+        }
+      })
     });
 
-    const result = await response.json();
+    const updateJson = await updateRes.json();
+    const updatedId = updateJson?.data?.customerAddressUpdate?.customerAddress?.id;
 
-    if (result.errors || result.data?.customerUpdateDefaultAddress?.userErrors?.length > 0) {
-      return res.status(400).json({ error: result.errors || result.data.customerUpdateDefaultAddress.userErrors });
+    if (!updatedId) {
+      return res.status(500).json({
+        error: "Failed to update address",
+        details: updateJson?.data?.customerAddressUpdate?.customerUserErrors || updateJson.errors,
+      });
     }
 
-    return res.status(200).json({ success: true, address: result.data.customerUpdateDefaultAddress.customer.defaultAddress });
+    // STEP 2 – Set as default
+    const defaultMutation = `
+      mutation customerDefaultAddressUpdate($customerAccessToken: String!, $addressId: ID!) {
+        customerDefaultAddressUpdate(customerAccessToken: $customerAccessToken, addressId: $addressId) {
+          customer {
+            defaultAddress {
+              id
+            }
+          }
+          customerUserErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    const defaultRes = await fetch(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        query: defaultMutation,
+        variables: {
+          customerAccessToken,
+          addressId: updatedId
+        }
+      })
+    });
+
+    const defaultJson = await defaultRes.json();
+    const defaultErrors = defaultJson?.data?.customerDefaultAddressUpdate?.customerUserErrors;
+
+    if (defaultErrors?.length > 0) {
+      return res.status(500).json({
+        error: "Updated address but failed to set default",
+        details: defaultErrors
+      });
+    }
+
+    return res.status(200).json({ success: true });
 
   } catch (err) {
     console.error("❌ Shopify address update failed:", err);
