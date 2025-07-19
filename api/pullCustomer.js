@@ -24,6 +24,7 @@ export default async function handler(req, res) {
       email
       phone
       defaultAddress {
+        id
         address1
         address2
         city
@@ -34,7 +35,6 @@ export default async function handler(req, res) {
     }
   }
 `;
-
   try {
     const response = await fetch(`https://${domain}/api/2023-10/graphql.json`, {
       method: "POST",
