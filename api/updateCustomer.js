@@ -3,10 +3,10 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  const { customerAccessToken, customer } = req.body;
+  const { token, email, phone, firstName, lastName } = req.body;
 
-  if (!customerAccessToken || !customer) {
-    return res.status(400).json({ error: 'Missing customer data or token' });
+  if (!token || !email || !firstName || !lastName) {
+    return res.status(400).json({ error: 'Missing required customer fields' });
   }
 
   const mutation = `
@@ -27,8 +27,13 @@ export default async function handler(req, res) {
   `;
 
   const variables = {
-    customerAccessToken,
-    customer
+    customerAccessToken: token,
+    customer: {
+      email,
+      phone,
+      firstName,
+      lastName
+    }
   };
 
   const shopifyRes = await fetch("https://tuqhcs-7a.myshopify.com/api/2023-07/graphql.json", {
