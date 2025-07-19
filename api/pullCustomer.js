@@ -16,16 +16,24 @@ export default async function handler(req, res) {
   console.log("📦 Customer Token:", customerToken);
   console.log("🔑 Storefront API Token:", storefrontToken);
 
-  const query = `
-    query {
-      customer(customerAccessToken: "${customerToken}") {
-        firstName
-        lastName
-        email
-        phone
+ const query = `
+  query {
+    customer(customerAccessToken: "${customerToken}") {
+      firstName
+      lastName
+      email
+      phone
+      defaultAddress {
+        address1
+        address2
+        city
+        province
+        zip
+        country
       }
     }
-  `;
+  }
+`;
 
   try {
     const response = await fetch(`https://${domain}/api/2023-10/graphql.json`, {
