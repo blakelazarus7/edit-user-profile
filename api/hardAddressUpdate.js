@@ -1,55 +1,43 @@
 export default async function handler(req, res) {
-  // ✅ CORS HEADERS
+  // ✅ CORS Headers
   res.setHeader("Access-Control-Allow-Origin", "https://www.eatfare.com");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") {
-    return res.status(200).end(); // preflight response
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "POST") return res.status(405).json({ error: "Only POST method allowed." });
+
+  const { email, address1, address2, city, province, zip, country } = req.body;
+
+  if (!email || !address1 || !city || !province || !zip || !country) {
+    return res.status(400).json({ error: "Missing required fields." });
   }
-
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
-  const {
-    email,
-    address1,
-    address2,
-    city,
-    province,
-    zip,
-    phone,
-    first_name,
-    last_name,
-  } = req.body;
-
-  const rechargeToken = "sk_1x1_195a6d72ab5445ab862e1b1c36afeb23d4792ea170cd8b698a999eb8322bb81c"; // ✅ Your real token
 
   try {
-    // 🔍 Step 1: Get customer ID
+    const RECHARGE_API_KEY = process.env.RECHARGE_API_KEY;
+
+    // Step 1: Lookup Recharge customer by email
     const customerRes = await fetch(`https://api.rechargeapps.com/customers?email=${email}`, {
       headers: {
-        "X-Recharge-Access-Token": rechargeToken,
+        "X-Recharge-Access-Token": RECHARGE_API_KEY,
         "Accept": "application/json",
-      },
+      }
     });
+
     const customerData = await customerRes.json();
-    const customer = customerData.customers?.[0];
+    const customer = customerData?.customers?.[0];
 
     if (!customer) {
-      return res.status(404).json({ error: "Customer not found" });
+      return res.status(404).json({ error: "Customer not found in Recharge." });
     }
 
-    const customerId = customer.id;
-
-    // 🧱 Step 2: Create a new address
-    const addressRes = await fetch(`https://api.rechargeapps.com/customers/${customerId}/addresses`, {
+    // Step 2: Create a new address under this customer
+    const addressCreateRes = await fetch(`https://api.rechargeapps.com/customers/${customer.id}/addresses`, {
       method: "POST",
       headers: {
-        "X-Recharge-Access-Token": rechargeToken,
+        "X-Recharge-Access-Token": RECHARGE_API_KEY,
         "Content-Type": "application/json",
-        "Accept": "application/json",
+        "Accept": "application/json"
       },
       body: JSON.stringify({
         address1,
@@ -57,64 +45,53 @@ export default async function handler(req, res) {
         city,
         province,
         zip,
-        country: "United States",
-        first_name,
-        last_name,
-        phone,
-      }),
+        country,
+        first_name: customer.first_name || "",
+        last_name: customer.last_name || "",
+        phone: customer.phone || ""
+      })
     });
 
-    const newAddressData = await addressRes.json();
+    const addressResult = await addressCreateRes.json();
 
-    if (!newAddressData.address?.id) {
-      return res.status(500).json({ error: "Failed to create new address" });
+    if (!addressCreateRes.ok) {
+      return res.status(400).json({ error: addressResult?.error || "Failed to create new address in Recharge." });
     }
 
-    const newAddressId = newAddressData.address.id;
+    const newAddressId = addressResult.address.id;
 
-    // 🔄 Step 3: Assign existing subscription to the new address
-    const subsRes = await fetch(`https://api.rechargeapps.com/subscriptions?email=${email}`, {
+    // Step 3: Get active subscriptions
+    const subRes = await fetch(`https://api.rechargeapps.com/subscriptions?customer_id=${customer.id}`, {
       headers: {
-        "X-Recharge-Access-Token": rechargeToken,
+        "X-Recharge-Access-Token": RECHARGE_API_KEY,
         "Accept": "application/json",
-      },
+      }
     });
 
-    const subsData = await subsRes.json();
-    const subscription = subsData.subscriptions?.[0];
+    const subData = await subRes.json();
+    const subscriptions = subData.subscriptions;
 
-    if (!subscription) {
-      return res.status(404).json({ error: "Subscription not found" });
+    if (!subscriptions || subscriptions.length === 0) {
+      return res.status(404).json({ error: "No subscriptions found for this customer." });
     }
 
-    const subscriptionId = subscription.id;
+    // Step 4: Update each subscription to use new address
+    const updates = await Promise.all(subscriptions.map(sub => {
+      return fetch(`https://api.rechargeapps.com/subscriptions/${sub.id}`, {
+        method: "PUT",
+        headers: {
+          "X-Recharge-Access-Token": RECHARGE_API_KEY,
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify({ address_id: newAddressId })
+      });
+    }));
 
-    const updateSubRes = await fetch(`https://api.rechargeapps.com/subscriptions/${subscriptionId}`, {
-      method: "PUT",
-      headers: {
-        "X-Recharge-Access-Token": rechargeToken,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-      },
-      body: JSON.stringify({
-        address_id: newAddressId,
-      }),
-    });
+    return res.status(200).json({ success: true, new_address_id: newAddressId });
 
-    const updatedSub = await updateSubRes.json();
-
-    if (!updatedSub.subscription?.id) {
-      return res.status(500).json({ error: "Failed to update subscription with new address" });
-    }
-
-    return res.status(200).json({
-      message: "✅ Address updated and subscription reassigned successfully",
-      new_address_id: newAddressId,
-      subscription_id: subscriptionId,
-    });
-
-  } catch (error) {
-    console.error("❌ Error:", error);
-    return res.status(500).json({ error: "Internal server error", details: error.message });
+  } catch (err) {
+    console.error("❌ Error updating Recharge address:", err);
+    return res.status(500).json({ error: "Internal server error." });
   }
 }
