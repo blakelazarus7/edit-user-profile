@@ -1,5 +1,4 @@
 export default async function handler(req, res) {
-  // ✅ CORS headers
   res.setHeader("Access-Control-Allow-Origin", "https://www.eatfare.com");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -16,7 +15,7 @@ export default async function handler(req, res) {
   try {
     const RECHARGE_API_KEY = process.env.RECHARGE_API_KEY;
 
-    // 🔍 Step 1: Find customer by email
+    // Get customer
     const customerRes = await fetch(`https://api.rechargeapps.com/customers?email=${email}`, {
       headers: {
         "X-Recharge-Access-Token": RECHARGE_API_KEY,
@@ -26,11 +25,9 @@ export default async function handler(req, res) {
     const customerData = await customerRes.json();
     const customer = customerData.customers?.[0];
 
-    if (!customer) {
-      return res.status(404).json({ error: "Customer not found in Recharge" });
-    }
+    if (!customer) return res.status(404).json({ error: "Customer not found" });
 
-    // 🔍 Step 2: Get all their subscriptions
+    // Get subscriptions
     const subsRes = await fetch(`https://api.rechargeapps.com/subscriptions?customer_id=${customer.id}`, {
       headers: {
         "X-Recharge-Access-Token": RECHARGE_API_KEY,
@@ -41,42 +38,40 @@ export default async function handler(req, res) {
     const subscriptions = subsData.subscriptions;
 
     if (!subscriptions || subscriptions.length === 0) {
-      return res.status(404).json({ error: "No subscriptions found for customer" });
+      return res.status(404).json({ error: "No subscriptions found for this customer" });
     }
 
-    // 🔁 Step 3: Update the actual address objects so Recharge frontend reflects the change
-const results = [];
+    // ✅ Update address inline on each subscription
+    const results = [];
+    for (const subscription of subscriptions) {
+      const updateRes = await fetch(`https://api.rechargeapps.com/subscriptions/${subscription.id}`, {
+        method: "PUT",
+        headers: {
+          "X-Recharge-Access-Token": RECHARGE_API_KEY,
+          "Accept": "application/json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          address1,
+          address2,
+          city,
+          province,
+          zip,
+          country
+        })
+      });
 
-for (const subscription of subscriptions) {
-  const updateRes = await fetch(`https://api.rechargeapps.com/addresses/${subscription.address_id}`, {
-    method: "PUT",
-    headers: {
-      "X-Recharge-Access-Token": RECHARGE_API_KEY,
-      "Accept": "application/json",
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      address1,
-      address2,
-      city,
-      province,
-      zip,
-      country
-    })
-  });
+      const updateJson = await updateRes.json();
 
-  const updateJson = await updateRes.json();
+      results.push({
+        subscription_id: subscription.id,
+        ok: updateRes.ok,
+        status: updateRes.status,
+        response: updateJson
+      });
+    }
 
-  results.push({
-    address_id: subscription.address_id,
-    subscription_id: subscription.id,
-    ok: updateRes.ok,
-    status: updateRes.status,
-    response: updateJson
-  });
-}
-
-return res.status(200).json({ success: true, updated: results });
+    return res.status(200).json({ success: true, updated: results });
 
   } catch (err) {
     console.error("❌ Recharge update failed:", err);
