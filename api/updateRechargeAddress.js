@@ -14,10 +14,9 @@ export default async function handler(req, res) {
   }
 
   try {
-    // 🔐 Replace with your actual Recharge API token
     const RECHARGE_API_KEY = process.env.RECHARGE_API_KEY;
 
-    // 🔍 Step 1: Get customer by email
+    // 🔍 Step 1: Find customer by email
     const customerRes = await fetch(`https://api.rechargeapps.com/customers?email=${email}`, {
       headers: {
         "X-Recharge-Access-Token": RECHARGE_API_KEY,
@@ -31,7 +30,7 @@ export default async function handler(req, res) {
       return res.status(404).json({ error: "Customer not found in Recharge" });
     }
 
-    // 🔍 Step 2: Get their subscription(s)
+    // 🔍 Step 2: Get all their subscriptions
     const subsRes = await fetch(`https://api.rechargeapps.com/subscriptions?customer_id=${customer.id}`, {
       headers: {
         "X-Recharge-Access-Token": RECHARGE_API_KEY,
@@ -39,37 +38,44 @@ export default async function handler(req, res) {
       }
     });
     const subsData = await subsRes.json();
-    const subscription = subsData.subscriptions?.[0];
+    const subscriptions = subsData.subscriptions;
 
-    if (!subscription) {
+    if (!subscriptions || subscriptions.length === 0) {
       return res.status(404).json({ error: "No subscriptions found for customer" });
     }
 
-    // 🔁 Step 3: Update the address on the subscription
-    const updateRes = await fetch(`https://api.rechargeapps.com/subscriptions/${subscription.id}`, {
-      method: "PUT",
-      headers: {
-        "X-Recharge-Access-Token": RECHARGE_API_KEY,
-        "Accept": "application/json",
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        address1,
-        address2,
-        city,
-        province, // state
-        zip,
-        country
-      })
-    });
+    // 🔁 Step 3: Update all subscriptions with new address
+    const results = [];
 
-    const updateResult = await updateRes.json();
+    for (const subscription of subscriptions) {
+      const updateRes = await fetch(`https://api.rechargeapps.com/subscriptions/${subscription.id}`, {
+        method: "PUT",
+        headers: {
+          "X-Recharge-Access-Token": RECHARGE_API_KEY,
+          "Accept": "application/json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          address1,
+          address2,
+          city,
+          province,
+          zip,
+          country
+        })
+      });
 
-    if (!updateRes.ok) {
-      return res.status(400).json({ error: updateResult?.error || "Failed to update address" });
+      const updateJson = await updateRes.json();
+
+      results.push({
+        subscription_id: subscription.id,
+        status: updateRes.status,
+        ok: updateRes.ok,
+        data: updateJson
+      });
     }
 
-    return res.status(200).json({ success: true, subscription: updateResult.subscription });
+    return res.status(200).json({ success: true, updated: results });
 
   } catch (err) {
     console.error("❌ Recharge update failed:", err);
